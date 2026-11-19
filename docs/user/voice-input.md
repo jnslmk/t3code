@@ -47,6 +47,17 @@ Vocabulary hints are not sent to OpenRouter; dictionary spellings are applied
 after transcription. If OpenRouter stops listing your model, dictation stops
 until you choose another.
 
+**ChatGPT subscription** uses the Codex CLI's existing ChatGPT sign-in on the
+selected environment. Choose it under **Settings → Voice → Transcribe with**.
+It works regardless of which agent is in the chat. Only connections with
+permission to change environment settings can use that login for dictation.
+ChatGPT receives the audio but not your vocabulary hints. Subscription limits
+apply, and T3 Code never falls back to the separately billed OpenAI API.
+
+Sign in with ChatGPT in Codex on that environment. To use a different existing
+Codex login for dictation, set `T3CODE_VOICE_CODEX_HOME` in the environment that
+launches the T3 server. Otherwise T3 uses `CODEX_HOME` or `~/.codex`.
+
 ## Set up a model
 
 In **Settings → Voice → Transcription**, download a model and choose **Use model** if it

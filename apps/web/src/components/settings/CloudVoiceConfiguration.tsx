@@ -19,6 +19,7 @@ import {
   CLOUD_SPEECH_PROVIDER_NAMES,
   isSecretReference,
   type CloudSpeechModel,
+  type CloudSpeechApiKeyProvider,
   type CloudSpeechProvider,
   type SecretProviderId,
   type SettingsSecretValue,
@@ -41,7 +42,11 @@ import {
   useAudioChoice,
 } from "../../speech/voiceConsent";
 import type { EnvironmentPresentation } from "../../state/environments";
-import { useEnvironmentScope, usePreparedConnection } from "../../state/session";
+import {
+  readEnvironmentScope,
+  useEnvironmentScope,
+  usePreparedConnection,
+} from "../../state/session";
 import { Button } from "../ui/button";
 import {
   Combobox,
@@ -148,17 +153,104 @@ function ModelPicker({
   );
 }
 
-export function CloudVoiceConfiguration({
-  environment,
-  provider,
-  active,
-  close,
-}: {
+type CloudVoiceProps = {
   environment: Pick<EnvironmentPresentation, "environmentId" | "label" | "serverConfig">;
   provider: CloudSpeechProvider;
   active: boolean;
   close: () => void;
-}) {
+};
+
+export function CloudVoiceConfiguration({ provider, ...props }: CloudVoiceProps) {
+  return provider === "codex" ? (
+    <SubscriptionVoiceConfiguration {...props} />
+  ) : (
+    <ApiKeyVoiceConfiguration {...props} provider={provider} />
+  );
+}
+
+function SubscriptionVoiceConfiguration({
+  environment,
+  active,
+  close,
+}: Omit<CloudVoiceProps, "provider">) {
+  const id = environment.environmentId;
+  const prepared = Option.getOrNull(usePreparedConnection(id));
+  const canUse = useEnvironmentScope(id, AuthOrchestrationOperateScope);
+  const canManage = useEnvironmentScope(id, AuthSettingsWriteScope);
+  const [presence, refresh] = useCloudRead(
+    canUse && canManage ? prepared : null,
+    getCloudSpeechKeys,
+  );
+  const ready = AsyncResult.isSuccess(presence) && presence.value?.codex === true;
+  const signedOut = AsyncResult.isSuccess(presence) && presence.value?.codex === false;
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && close()}>
+      <DialogPopup className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>
+            {active ? "ChatGPT subscription status" : "Use ChatGPT subscription for dictation?"}
+          </DialogTitle>
+          <DialogDescription>{cloudSpeechDisclosure("codex", environment.label)}</DialogDescription>
+        </DialogHeader>
+        <DialogPanel>
+          {!prepared || !canUse ? (
+            <p>Connect to {environment.label} with dictation access to continue.</p>
+          ) : !canManage ? (
+            <p>You need environment settings permission to use its ChatGPT subscription.</p>
+          ) : AsyncResult.isFailure(presence) ? (
+            <Button size="sm" variant="outline" onClick={refresh}>
+              Retry checking ChatGPT sign-in
+            </Button>
+          ) : !AsyncResult.isSuccess(presence) || !presence.value ? (
+            <p role="status">Checking ChatGPT sign-in…</p>
+          ) : presence.value.codex === undefined ? (
+            <p>Update {environment.label} to use ChatGPT subscription dictation.</p>
+          ) : !ready ? (
+            <p>Sign in to Codex with ChatGPT on {environment.label}, then check again.</p>
+          ) : (
+            <p>This choice applies only to this device. Choose Off to stop sharing.</p>
+          )}
+        </DialogPanel>
+        <DialogFooter>
+          {prepared && canUse && canManage && signedOut && (
+            <Button type="button" size="sm" variant="outline" onClick={refresh}>
+              Check again
+            </Button>
+          )}
+          <Button type="button" size="sm" variant="outline" onClick={close}>
+            {active ? "Close" : "Cancel"}
+          </Button>
+          {prepared && canUse && canManage && ready && !active && (
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => {
+                if (
+                  !readEnvironmentScope(id, AuthOrchestrationOperateScope) ||
+                  !readEnvironmentScope(id, AuthSettingsWriteScope)
+                ) {
+                  return;
+                }
+                chooseAudioDestination({ kind: "cloud", provider: "codex", environmentId: id });
+                close();
+              }}
+            >
+              Use ChatGPT subscription
+            </Button>
+          )}
+        </DialogFooter>
+      </DialogPopup>
+    </Dialog>
+  );
+}
+
+function ApiKeyVoiceConfiguration({
+  environment,
+  provider,
+  active,
+  close,
+}: Omit<CloudVoiceProps, "provider"> & { provider: CloudSpeechApiKeyProvider }) {
   const id = environment.environmentId;
   const name = CLOUD_SPEECH_LABELS[provider];
   const company = CLOUD_SPEECH_PROVIDER_NAMES[provider];
@@ -215,11 +307,15 @@ export function CloudVoiceConfiguration({
   const modelChosen = isModelId(model) && (listedModels?.some((m) => m.id === model) ?? false);
   const keyReady = draft.trim() ? credential !== undefined : Boolean(saved);
   const modelChanged = model !== (currentModel ?? "");
-  const destination = (): CloudDestination =>
-    routed && isModelId(model)
-      ? { kind: "cloud", provider: "openrouter", environmentId: id, model }
-      : { kind: "cloud", provider: provider as "openai" | "xai", environmentId: id };
-  const enable = () => chooseAudioDestination(destination());
+  const destination: CloudDestination | null =
+    provider === "openrouter"
+      ? isModelId(model)
+        ? { kind: "cloud", provider, environmentId: id, model }
+        : null
+      : { kind: "cloud", provider, environmentId: id };
+  const enable = () => {
+    if (destination) chooseAudioDestination(destination);
+  };
   const canSubmit = routed
     ? modelChosen && keyReady && (!active || modelChanged || keyChanged)
     : credential !== undefined;
@@ -229,7 +325,7 @@ export function CloudVoiceConfiguration({
     setError("");
     setBusy(true);
     try {
-      const commit = thenEnable ? pendingCloudAudioChoice(destination()) : null;
+      const commit = thenEnable && destination ? pendingCloudAudioChoice(destination) : null;
       await runEnvironmentSpeech(setCloudSpeechKey(prepared, provider, value));
       refresh();
       commit?.();

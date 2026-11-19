@@ -1,5 +1,6 @@
 import {
   AuthOrchestrationOperateScope,
+  AuthSettingsWriteScope,
   type CloudSpeechModelId,
   type CloudSpeechProvider,
   type EnvironmentId,
@@ -90,7 +91,10 @@ const native = requireOptionalNativeModule<{
 }>("T3VoiceTranscription");
 export const hasEnvironmentVoiceCapture = typeof native?.decodeRecording === "function";
 
-const voiceConnections = (capability: "voiceTranscription" | "cloudVoiceTranscription") =>
+const voiceConnections = (
+  capability: "voiceTranscription" | "cloudVoiceTranscription",
+  subscription = false,
+) =>
   Atom.family((id: EnvironmentId) =>
     Atom.make((get) => {
       const environment = get(environmentPresentations.presentationAtom(id));
@@ -101,7 +105,9 @@ const voiceConnections = (capability: "voiceTranscription" | "cloudVoiceTranscri
         !sessionHasScope(
           get(environmentSession.sessionStateAtom(id)),
           AuthOrchestrationOperateScope,
-        )
+        ) ||
+        (subscription &&
+          !sessionHasScope(get(environmentSession.sessionStateAtom(id)), AuthSettingsWriteScope))
       )
         return null;
       return Option.getOrNull(get(environmentSession.preparedConnectionValueAtom(id)));
@@ -109,6 +115,7 @@ const voiceConnections = (capability: "voiceTranscription" | "cloudVoiceTranscri
   );
 export const voiceConnectionAtom = voiceConnections("voiceTranscription");
 export const cloudVoiceConnectionAtom = voiceConnections("cloudVoiceTranscription");
+const subscriptionVoiceConnectionAtom = voiceConnections("cloudVoiceTranscription", true);
 
 // React Native's XMLHttpRequest fetch follows redirects. Expo's native transport honors redirect: "error".
 export function runSpeech<A, E>(
@@ -244,9 +251,13 @@ export const voiceRouteAtom = Atom.make((get) => {
   const grant = get(voiceGrantAtom);
   if (!grant) return null;
   const cloud = grant.destination.kind === "cloud" ? grant.destination : undefined;
-  const connectionAtom = (cloud ? cloudVoiceConnectionAtom : voiceConnectionAtom)(
-    grant.destination.environmentId,
-  );
+  const connectionAtom = (
+    cloud?.provider === "codex"
+      ? subscriptionVoiceConnectionAtom
+      : cloud
+        ? cloudVoiceConnectionAtom
+        : voiceConnectionAtom
+  )(grant.destination.environmentId);
   const connection = get(connectionAtom);
   const registry = get.registry;
   return {

@@ -76,16 +76,16 @@ export const speechHttpApiLayer = HttpApiBuilder.group(
       scope: AuthEnvironmentScope = AuthOrchestrationOperateScope,
     ) {
       yield* annotateEnvironmentRequest(endpoint);
-      yield* requireEnvironmentScope(scope);
+      return yield* requireEnvironmentScope(scope);
     });
     return handlers
       .handle(
         "cloudKeys",
         Effect.fn("environment.voice.cloudKeys")(function* (args) {
-          yield* guard(args.endpoint.name);
-          return yield* cloud.configured.pipe(
-            Effect.catch((error) => failEnvironmentInternal("internal_error", error)),
-          );
+          const session = yield* guard(args.endpoint.name);
+          return yield* cloud
+            .configured(session.scopes.has(AuthSettingsWriteScope))
+            .pipe(Effect.catch((error) => failEnvironmentInternal("internal_error", error)));
         }),
       )
       .handle(
@@ -108,6 +108,8 @@ export const speechHttpApiLayer = HttpApiBuilder.group(
         "transcribeCloud",
         Effect.fn("environment.voice.transcribeCloud")(function* (args) {
           yield* guard(args.endpoint.name);
+          if (args.params.provider === "codex")
+            yield* requireEnvironmentScope(AuthSettingsWriteScope);
           const decoded = parseAudio(args.payload);
           if (Option.isNone(decoded)) return yield* failEnvironmentInvalidRequest("invalid_audio");
           const text = yield* cloud

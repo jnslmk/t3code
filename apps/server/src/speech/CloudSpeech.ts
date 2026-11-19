@@ -1,5 +1,6 @@
 import {
   CloudSpeechApiKey,
+  type CloudSpeechApiKeyProvider,
   CloudSpeechError,
   CloudSpeechModel,
   CloudSpeechModelId,
@@ -13,14 +14,19 @@ import {
   type SpeechTranscriptionOptions,
 } from "@t3tools/contracts";
 import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { cloudSpeechLanguages, effectiveSpeechLanguage } from "@t3tools/shared/speech";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
+import { expandHomePath } from "../os-jank.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { requireSettingsSecret } from "../secrets/settingsSecretValue.ts";
 import { applySpeechAliases } from "./customWords.ts";
@@ -34,12 +40,24 @@ const endpoints = {
 };
 const OPENROUTER_CATALOG_URL =
   "https://openrouter.ai/api/v1/models?output_modalities=transcription&zdr=true";
+const CODEX_TRANSCRIPTION_URL = "https://chatgpt.com/backend-api/transcribe";
 const isApiKey = Schema.is(CloudSpeechApiKey);
 const isModelId = Schema.is(CloudSpeechModelId);
 const sameCredential = Schema.toEquivalence(SettingsSecretValue);
 const OpenRouterCatalog = Schema.Struct({
   data: Schema.Array(Schema.Struct({ id: Schema.String, name: Schema.optionalKey(Schema.String) })),
 });
+const decodeCodexTokens = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(
+    Schema.Struct({
+      auth_mode: Schema.Literal("chatgpt"),
+      tokens: Schema.Struct({
+        access_token: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9._~+/-]+=*$/)),
+        account_id: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]{1,256}$/)),
+      }),
+    }),
+  ),
+);
 
 function wave(samples: Float32Array) {
   const buffer = new ArrayBuffer(44 + samples.length * 2);
@@ -67,17 +85,19 @@ function wave(samples: Float32Array) {
 }
 
 function audioBody(
-  provider: "openai" | "xai",
+  provider: "openai" | "xai" | "codex",
   audio: ArrayBuffer,
   language: string,
   options: SpeechTranscriptionOptions,
 ) {
   const form = new FormData();
-  form.set("model", endpoints[provider].model);
-  if (language !== "auto") form.set(provider === "openai" ? "languages[]" : "language", language);
-  for (const { term } of options.speechCustomWords) {
-    if (provider === "openai" && /[<>\r\n]/.test(term)) continue;
-    form.append(provider === "openai" ? "keywords[]" : "keyterm", term);
+  if (provider !== "codex") form.set("model", endpoints[provider].model);
+  if (language !== "auto") form.set(provider === "xai" ? "language" : "languages[]", language);
+  if (provider !== "codex") {
+    for (const { term } of options.speechCustomWords) {
+      if (provider === "openai" && /[<>\r\n]/.test(term)) continue;
+      form.append(provider === "openai" ? "keywords[]" : "keyterm", term);
+    }
   }
   if (provider === "xai") {
     if (language !== "auto") form.set("format", "true");
@@ -104,11 +124,13 @@ function openRouterBody(model: string, audio: ArrayBuffer, language: string) {
 export class CloudSpeech extends Context.Service<
   CloudSpeech,
   {
-    readonly configured: Effect.Effect<CloudSpeechKeys, ServerSettingsError>;
+    readonly configured: (
+      includeCodex?: boolean,
+    ) => Effect.Effect<CloudSpeechKeys, ServerSettingsError>;
     /** OpenRouter's public transcription catalog, cached briefly on this server. */
     readonly models: Effect.Effect<ReadonlyArray<CloudSpeechModel>, CloudSpeechError>;
     readonly setKey: (
-      provider: CloudSpeechProvider,
+      provider: CloudSpeechApiKeyProvider,
       key: Redacted.Redacted<string> | SecretReference | null,
     ) => Effect.Effect<void, ServerSettingsError>;
     readonly transcribe: (
@@ -126,16 +148,33 @@ export const layer = Layer.effect(
     const settings = yield* ServerSettings.ServerSettingsService;
     const resolver = yield* SecretResolver.SecretResolver;
     const http = yield* HttpClient.HttpClient;
+    const subscriptionHttp = HttpClient.withScope(http);
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const env = yield* HostProcess.Environment;
+    const hostHome = yield* HostProcess.HomeDirectory;
+    const codexHome = env.T3CODE_VOICE_CODEX_HOME?.trim() || env.CODEX_HOME?.trim();
+    const codexAuthPath = path.join(
+      codexHome ? yield* expandHomePath(codexHome) : path.join(hostHome, ".codex"),
+      "auth.json",
+    );
+    const readCodexTokens = fs.readFileString(codexAuthPath).pipe(
+      Effect.flatMap(decodeCodexTokens),
+      Effect.map(({ tokens }) => tokens),
+      Effect.option,
+    );
     const credentials = settings.getSettings.pipe(
       Effect.map((value) => value.cloudSpeechCredentials),
     );
-    const configured = credentials.pipe(
-      Effect.map(({ openai, xai, openrouter }) => ({
+    const configured = Effect.fn("CloudSpeech.configured")(function* (includeCodex = false) {
+      const { openai, xai, openrouter } = yield* credentials;
+      return {
         openai: Boolean(openai),
         xai: Boolean(xai),
         openrouter: Boolean(openrouter),
-      })),
-    );
+        ...(includeCodex ? { codex: Option.isSome(yield* readCodexTokens) } : {}),
+      };
+    });
     const execute = (request: HttpClientRequest.HttpClientRequest) =>
       http
         .execute(request)
@@ -169,7 +208,7 @@ export const layer = Layer.effect(
       (exit) => (Exit.isSuccess(exit) ? "10 minutes" : 0),
     );
     const setKey = Effect.fn("CloudSpeech.setKey")(function* (
-      provider: CloudSpeechProvider,
+      provider: CloudSpeechApiKeyProvider,
       key: Redacted.Redacted<string> | SecretReference | null,
     ) {
       yield* settings.updateSettings({
@@ -185,8 +224,10 @@ export const layer = Layer.effect(
         options: SpeechTranscriptionOptions,
         model?: string,
       ) {
-        const source = (yield* credentials)[provider];
-        if (!source) return yield* new CloudSpeechError({ provider, reason: "missing-key" });
+        const api =
+          provider === "codex" ? undefined : { provider, source: (yield* credentials)[provider] };
+        if (api && !api.source)
+          return yield* new CloudSpeechError({ provider, reason: "missing-key" });
         if (provider === "openrouter" && (!model || !isModelId(model)))
           return yield* new CloudSpeechError({ provider, reason: "model-unavailable" });
         const samples = yield* Effect.try({
@@ -198,31 +239,59 @@ export const layer = Layer.effect(
             }),
         });
         const language = effectiveSpeechLanguage(cloudSpeechLanguages, options.speechLanguage);
-        if (provider === "openrouter" && !(yield* models).some((entry) => entry.id === model))
-          return yield* new CloudSpeechError({ provider, reason: "model-unavailable" });
-        // A vault that locked since the last recording must not authorize a new upload.
-        if (isSecretReference(source)) yield* resolver.invalidate([source]);
-        const unreadable = () => new CloudSpeechError({ provider, reason: "unreadable-key" });
-        const key = yield* requireSettingsSecret(resolver, source).pipe(
-          Effect.mapError(unreadable),
-        );
-        if (!isApiKey(key)) return yield* unreadable();
-        const audio = wave(samples);
-        const request = HttpClientRequest.post(endpoints[provider].url).pipe(
-          HttpClientRequest.bearerToken(Redacted.make(key)),
-          provider === "openrouter"
-            ? openRouterBody(model!, audio, language)
-            : audioBody(provider, audio, language, options),
-        );
+        let request: HttpClientRequest.HttpClientRequest;
+        if (api === undefined) {
+          const tokens = yield* readCodexTokens;
+          if (Option.isNone(tokens))
+            return yield* new CloudSpeechError({ provider, reason: "missing-key" });
+          request = HttpClientRequest.post(CODEX_TRANSCRIPTION_URL).pipe(
+            HttpClientRequest.bearerToken(Redacted.make(tokens.value.access_token)),
+            HttpClientRequest.setHeaders({
+              "chatgpt-account-id": tokens.value.account_id,
+              originator: "Codex Desktop",
+              "user-agent": "T3Code",
+            }),
+            audioBody("codex", wave(samples), language, options),
+          );
+        } else {
+          const { provider, source } = api;
+          if (provider === "openrouter" && !(yield* models).some((entry) => entry.id === model))
+            return yield* new CloudSpeechError({ provider, reason: "model-unavailable" });
+          // A vault that locked since the last recording must not authorize a new upload.
+          if (isSecretReference(source)) yield* resolver.invalidate([source]);
+          const unreadable = () => new CloudSpeechError({ provider, reason: "unreadable-key" });
+          const key = yield* requireSettingsSecret(resolver, source).pipe(
+            Effect.mapError(unreadable),
+          );
+          if (!isApiKey(key)) return yield* unreadable();
+          const audio = wave(samples);
+          request = HttpClientRequest.post(endpoints[provider].url).pipe(
+            HttpClientRequest.bearerToken(Redacted.make(key)),
+            provider === "openrouter"
+              ? openRouterBody(model!, audio, language)
+              : audioBody(provider, audio, language, options),
+          );
+          // A catalog fetch or vault lookup may have outlived the credential it started with.
+          const current = (yield* credentials)[provider];
+          if (!current || !sameCredential(source, current))
+            return yield* new CloudSpeechError({
+              provider,
+              reason: current ? "key-changed" : "missing-key",
+            });
+        }
         const unavailable = () => new CloudSpeechError({ provider, reason: "unavailable" });
-        // A catalog fetch or vault lookup may have outlived the credential it started with.
-        const current = (yield* credentials)[provider];
-        if (!current || !sameCredential(source, current))
-          return yield* new CloudSpeechError({
-            provider,
-            reason: current ? "key-changed" : "missing-key",
-          });
-        const response = yield* execute(request).pipe(Effect.mapError(unavailable));
+        const response = yield* (
+          provider === "codex"
+            ? subscriptionHttp.execute(request).pipe(
+                Effect.provideService(FetchHttpClient.RequestInit, {
+                  redirect: "error",
+                  credentials: "omit",
+                }),
+                // Neither the OAuth credential nor the account ID belongs in HTTP spans.
+                Effect.provideService(HttpClient.TracerDisabledWhen, () => true),
+              )
+            : execute(request)
+        ).pipe(Effect.mapError(unavailable));
         if (response.status < 200 || response.status >= 300)
           return yield* new CloudSpeechError({
             provider,
@@ -247,6 +316,7 @@ export const layer = Layer.effect(
       },
       (effect, provider) =>
         effect.pipe(
+          Effect.scoped,
           Effect.timeoutOrElse({
             duration: "2 minutes",
             orElse: () => Effect.fail(new CloudSpeechError({ provider, reason: "unavailable" })),

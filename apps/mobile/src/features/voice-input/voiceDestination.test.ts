@@ -1,4 +1,4 @@
-import { EnvironmentId } from "@t3tools/contracts";
+import { AuthSettingsWriteScope, EnvironmentId } from "@t3tools/contracts";
 import { Atom } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
 import { appAtomRegistry } from "../../state/atom-registry";
@@ -73,9 +73,10 @@ vi.mock("../../state/session", async () => {
           }),
         ),
       ),
-      sessionStateAtom: Atom.family((_id: string) => Atom.make(true)),
+      sessionStateAtom: Atom.family((id: string) => Atom.make(id !== "no-settings")),
     },
-    sessionHasScope: () => true,
+    sessionHasScope: (settingsAllowed: boolean, scope: string) =>
+      scope !== AuthSettingsWriteScope || settingsAllowed,
   };
 });
 
@@ -221,6 +222,25 @@ it("keeps local as the default and never reuses consent for an offline or resele
     const upload = new URL(String(mocks.fetch.mock.lastCall![0]));
     expect(upload.pathname).toBe("/api/voice/cloud/openrouter/transcribe");
     expect(upload.searchParams.get("model")).toBe("acme/transcribe-1");
+    chooseVoiceDestination(EnvironmentId.make("no-settings"), "codex");
+    expect(appAtomRegistry.get(voiceRouteAtom)).toEqual({ transcriber: null });
+    chooseVoiceDestination(host, "codex");
+    expect(appAtomRegistry.get(voiceGrantAtom)?.destination).toEqual({
+      kind: "cloud",
+      provider: "codex",
+      environmentId: host,
+    });
+    const subscription = appAtomRegistry.get(voiceRouteAtom)!.transcriber!;
+    mocks.fetch
+      .mockResolvedValueOnce(Response.json({ openai: true, xai: true, codex: true }))
+      .mockResolvedValueOnce(Response.json({ text: "subscription" }));
+    const subscriptionRecording = await subscription.prepare(options);
+    await expect(subscriptionRecording.transcribe("file:///voice.m4a", options)).resolves.toBe(
+      "subscription",
+    );
+    expect(new URL(String(mocks.fetch.mock.lastCall![0])).pathname).toBe(
+      "/api/voice/cloud/codex/transcribe",
+    );
     const failWrite = () => {
       throw new Error("Device storage is unavailable");
     };

@@ -50,6 +50,7 @@ import {
 } from "./baseSchemas.ts";
 import {
   CloudSpeechApiKey,
+  CloudSpeechApiKeyProvider,
   CloudSpeechError,
   CloudSpeechKeys,
   CloudSpeechModelId,
@@ -801,7 +802,7 @@ export class EnvironmentVoiceHttpApi extends HttpApiGroup.make("voice")
   .add(
     HttpApiEndpoint.post("setCloudKey", "/api/voice/cloud/:provider/key", {
       headers: OptionalBearerHeaders,
-      params: Schema.Struct({ provider: CloudSpeechProvider }),
+      params: Schema.Struct({ provider: CloudSpeechApiKeyProvider }),
       payload: Schema.Struct({
         key: Schema.NullOr(
           Schema.Union([Schema.RedactedFromValue(CloudSpeechApiKey), SecretReference]),

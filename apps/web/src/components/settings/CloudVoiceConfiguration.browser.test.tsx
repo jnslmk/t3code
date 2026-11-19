@@ -6,6 +6,7 @@ import { page, userEvent } from "vite-plus/test/browser";
 import { render } from "../../../test/render";
 import "~/index.css";
 import { chooseAudioDestination } from "../../speech/voiceConsent";
+import * as session from "../../state/session";
 import { useEnvironmentScope, usePreparedConnection } from "../../state/session";
 import { VoiceSettingsPanel } from "./VoiceSettingsPanel";
 import { SettingsScopeProvider } from "./SettingsScopeContext";
@@ -55,6 +56,7 @@ it("enables the chosen provider only after a successful setup and keeps its gran
     httpAuthorization: null,
   });
   using cleanup = new DisposableStack();
+  using _readScope = vi.spyOn(session, "readEnvironmentScope").mockReturnValue(true);
   cleanup.defer(() => chooseAudioDestination(null));
   chooseAudioDestination({ kind: "environment", environmentId: id });
   const writes: unknown[] = [];
@@ -63,7 +65,7 @@ it("enables the chosen provider only after a successful setup and keeps its gran
   using _network = vi.spyOn(globalThis, "fetch").mockImplementation((request, init) => {
     const url = new URL(request instanceof Request ? request.url : request, window.location.href);
     if (url.pathname === "/api/voice/cloud/keys")
-      return Promise.resolve(Response.json({ openai: writes.length > 0, xai: true }));
+      return Promise.resolve(Response.json({ openai: writes.length > 0, xai: true, codex: true }));
     if (url.pathname === "/api/voice/cloud/openai/key") {
       if (rejectNextWrite) {
         rejectNextWrite = false;
@@ -122,6 +124,12 @@ it("enables the chosen provider only after a successful setup and keeps its gran
           await page.getByRole("option", { name: "Grok Voice Transcribe via Laptop" }).click();
           await dialog.getByRole("button", { name: "Use Grok Voice Transcribe" }).click();
           await expect.element(destination).toHaveTextContent("Grok Voice Transcribe via Laptop");
+          await destination.click();
+          await page.getByRole("option", { name: "ChatGPT subscription via Laptop" }).click();
+          await expect.element(dialog.getByText(/never switches to the paid API/)).toBeVisible();
+          await dialog.getByRole("button", { name: "Use ChatGPT subscription" }).click();
+          await expect.element(destination).toHaveTextContent("ChatGPT subscription via Laptop");
+          expect(writes).toHaveLength(2);
           await destination.click();
           await page.getByRole("option", { name: "Off", exact: true }).click();
           await expect.element(destination).toHaveTextContent("Off");

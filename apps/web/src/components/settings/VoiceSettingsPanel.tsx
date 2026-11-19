@@ -130,7 +130,7 @@ function CloudSpeechLogo({ provider }: { provider: CloudSpeechProvider }) {
     return <ProviderPackageIcon icon={openRouterIcon} aria-hidden className="size-4 shrink-0" />;
   return (
     <ProviderInstanceIcon
-      driverKind={ProviderDriverKind.make(provider === "openai" ? "codex" : "grok")}
+      driverKind={ProviderDriverKind.make(provider === "xai" ? "grok" : "codex")}
       displayName={CLOUD_SPEECH_LABELS[provider]}
       iconClassName="size-4"
     />
@@ -1235,7 +1235,11 @@ export function VoiceSettingsPanel() {
   );
   // OpenRouter users without settings access still manage their own model choice.
   const manageLabel =
-    destination.cloudProvider === "openrouter" ? "Manage OpenRouter" : "Manage key";
+    destination.cloudProvider === "codex"
+      ? "ChatGPT subscription status"
+      : destination.cloudProvider === "openrouter"
+        ? "Manage OpenRouter"
+        : "Manage key";
   const chosenEnvironment = environments.find(
     (environment) => environment.environmentId === destination.environmentId,
   );
@@ -1447,7 +1451,9 @@ export function VoiceSettingsPanel() {
               </Select>
               {destination.cloudProvider &&
                 chosenEnvironment &&
-                (canManageKey || destination.cloudProvider === "openrouter") && (
+                (canManageKey ||
+                  destination.cloudProvider === "openrouter" ||
+                  destination.cloudProvider === "codex") && (
                   <Tooltip>
                     <TooltipTrigger
                       render={

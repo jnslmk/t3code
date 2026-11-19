@@ -12,7 +12,11 @@ import {
   type VoiceInputState,
 } from "@t3tools/client-runtime/voice-input";
 import type { PreparedConnection } from "@t3tools/client-runtime/connection";
-import { AuthOrchestrationOperateScope, CLOUD_SPEECH_LABELS } from "@t3tools/contracts";
+import {
+  AuthOrchestrationOperateScope,
+  AuthSettingsWriteScope,
+  CLOUD_SPEECH_LABELS,
+} from "@t3tools/contracts";
 import type {
   EnvironmentId,
   EnvironmentSpeechModel,
@@ -120,6 +124,7 @@ export function useVoiceTranscriptionDestination() {
   const environment = useEnvironment(environmentId);
   const connection = Option.getOrNull(usePreparedConnection(environmentId));
   const canDictate = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
+  const canUseSubscription = useEnvironmentScope(environmentId, AuthSettingsWriteScope);
   const cloud = grant?.destination.kind === "cloud" ? grant.destination : undefined;
   const provider = cloud?.provider;
   const model = cloud?.provider === "openrouter" ? cloud.model : undefined;
@@ -137,7 +142,8 @@ export function useVoiceTranscriptionDestination() {
       provider && environment
         ? `${CLOUD_SPEECH_LABELS[provider]} via ${environment.label}`
         : (environment?.label ?? null),
-    prepared: supported && canDictate ? connection : null,
+    prepared:
+      supported && canDictate && (provider !== "codex" || canUseSubscription) ? connection : null,
   };
 }
 

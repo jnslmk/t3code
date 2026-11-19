@@ -1,9 +1,13 @@
 import { it } from "@effect/vitest";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { DEFAULT_SPEECH_TRANSCRIPTION_OPTIONS, SecretProviderId } from "@t3tools/contracts";
 import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 import * as Redacted from "effect/Redacted";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import { expect, vi } from "vite-plus/test";
@@ -24,6 +28,7 @@ it.effect.each(["openai", "xai"] as const)("sends only to %s using its own saved
       Effect.provide(
         CloudSpeech.layer.pipe(
           Layer.provide(FetchHttpClient.layer),
+          Layer.provide(NodeServices.layer),
           Layer.provide(ServerSettings.ServerSettingsService.layerTest()),
           Layer.provide(
             Layer.mock(SecretResolver.SecretResolver)({
@@ -49,7 +54,7 @@ it.effect.each(["openai", "xai"] as const)("sends only to %s using its own saved
     yield* service.setKey(provider === "openai" ? "xai" : "openai", Redacted.make("other"));
     expect((yield* Effect.flip(transcribe()))._tag).toBe("CloudSpeechError");
     yield* service.setKey(provider, Redacted.make("chosen"));
-    expect(yield* service.configured).toEqual({ openai: true, xai: true, openrouter: false });
+    expect(yield* service.configured()).toEqual({ openai: true, xai: true, openrouter: false });
     yield* Effect.flip(transcribe(new Uint8Array(3)));
     expect(upstream).not.toHaveBeenCalled();
     expect(yield* transcribe()).toBe("hello");
@@ -75,11 +80,11 @@ it.effect.each(["openai", "xai"] as const)("sends only to %s using its own saved
     upstream.mockResolvedValueOnce(new Response("sensitive upstream diagnostic", { status: 401 }));
     expect(yield* Effect.flip(transcribe())).toMatchObject({ provider, reason: "rejected-key" });
     yield* service.setKey(provider, null);
-    expect((yield* service.configured)[provider]).toBe(false);
+    expect((yield* service.configured())[provider]).toBe(false);
     yield* Effect.flip(transcribe());
     expect(upstream).toHaveBeenCalledTimes(2);
     yield* service.setKey(provider, reference);
-    expect((yield* service.configured)[provider]).toBe(true);
+    expect((yield* service.configured())[provider]).toBe(true);
     expect(read).not.toHaveBeenCalled();
     resolved = "resolved-fixture";
     expect(yield* transcribe()).toBe("hello");
@@ -96,6 +101,92 @@ it.effect.each(["openai", "xai"] as const)("sends only to %s using its own saved
   }),
 );
 
+it.effect("uses only the selected host Codex login and sends no model or vocabulary", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-voice-codex-" });
+    const selected = path.join(root, "voice");
+    const ambient = path.join(root, "ambient");
+    yield* fs.makeDirectory(selected);
+    yield* fs.makeDirectory(ambient);
+    const authPath = path.join(selected, "auth.json");
+    const tokens = { access_token: "fixture.oauth.token", account_id: "fixture-account" };
+    const login = { auth_mode: "chatgpt", tokens };
+    yield* fs.writeFileString(path.join(ambient, "auth.json"), JSON.stringify(login));
+    const service = yield* CloudSpeech.CloudSpeech.pipe(
+      Effect.provide(
+        CloudSpeech.layer.pipe(
+          Layer.provide(FetchHttpClient.layer),
+          Layer.provide(ServerSettings.ServerSettingsService.layerTest()),
+          Layer.provide(Layer.mock(SecretResolver.SecretResolver)({})),
+        ),
+      ),
+      Effect.provideService(HostProcess.Environment, {
+        T3CODE_VOICE_CODEX_HOME: selected,
+        CODEX_HOME: ambient,
+      }),
+    );
+    yield* service.setKey("openai", Redacted.make("available-paid-key"));
+    const upstream = vi.fn<typeof fetch>(async () => Response.json({ text: "alias" }));
+    const transcribe = () =>
+      service
+        .transcribe(
+          "codex",
+          new Uint8Array(new Float32Array([0, 0.5]).buffer),
+          {
+            ...DEFAULT_SPEECH_TRANSCRIPTION_OPTIONS,
+            speechLanguage: "en",
+            speechCustomWords: [{ term: "T3 Code", aliases: ["alias"] }],
+          },
+          "ignored-model",
+        )
+        .pipe(Effect.provideService(FetchHttpClient.Fetch, upstream));
+
+    expect(yield* service.configured(true)).toMatchObject({ codex: false, openai: true });
+    expect(yield* Effect.flip(transcribe())).toMatchObject({ reason: "missing-key" });
+    for (const invalid of [
+      { ...login, auth_mode: "apikey" },
+      { ...login, tokens: { ...tokens, account_id: "bad\r\naccount" } },
+      { ...login, tokens: { ...tokens, access_token: "bad\r\ntoken" } },
+    ]) {
+      yield* fs.writeFileString(authPath, JSON.stringify(invalid));
+      expect(yield* Effect.flip(transcribe())).toMatchObject({ reason: "missing-key" });
+    }
+    expect(upstream).not.toHaveBeenCalled();
+
+    yield* fs.writeFileString(authPath, JSON.stringify(login));
+    expect(yield* service.configured()).not.toHaveProperty("codex");
+    expect(yield* service.configured(true)).toMatchObject({ codex: true });
+    expect(yield* transcribe()).toBe("T3 Code");
+    const [url, init] = upstream.mock.calls[0]!;
+    expect(String(url)).toBe("https://chatgpt.com/backend-api/transcribe");
+    expect(init?.redirect).toBe("error");
+    expect(init?.credentials).toBe("omit");
+    const headers = new Headers(init?.headers);
+    expect(headers.get("authorization")).toBe("Bearer fixture.oauth.token");
+    expect(headers.get("chatgpt-account-id")).toBe("fixture-account");
+    expect(headers.get("originator")).toBe("Codex Desktop");
+    expect(headers.has("cookie")).toBe(false);
+    const form = init?.body as FormData;
+    expect([...form.keys()]).toEqual(["languages[]", "file"]);
+    expect(form.get("languages[]")).toBe("en");
+    const file = form.get("file") as File;
+    expect(file.type).toBe("audio/wav");
+    const wav = new DataView(yield* Effect.promise(() => file.arrayBuffer()));
+    expect(wav.getUint32(24, true)).toBe(16_000);
+    expect(wav.getInt16(46, true)).toBe(16384);
+
+    upstream.mockResolvedValueOnce(new Response("sensitive upstream diagnostic", { status: 401 }));
+    expect(yield* Effect.flip(transcribe())).toMatchObject({
+      provider: "codex",
+      reason: "rejected-key",
+    });
+    expect(upstream).toHaveBeenCalledTimes(2);
+    expect(upstream.mock.calls[1]?.[1]?.signal?.aborted).toBe(true);
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
 it.effect("uploads to OpenRouter only for a listed exact model, as zero-retention JSON WAV", () =>
   Effect.gen(function* () {
     const upstream = vi.fn<typeof fetch>(async (input) =>
@@ -107,6 +198,7 @@ it.effect("uploads to OpenRouter only for a listed exact model, as zero-retentio
       Effect.provide(
         CloudSpeech.layer.pipe(
           Layer.provide(FetchHttpClient.layer),
+          Layer.provide(NodeServices.layer),
           Layer.provide(ServerSettings.ServerSettingsService.layerTest()),
           Layer.provide(Layer.mock(SecretResolver.SecretResolver)({})),
         ),
@@ -165,6 +257,7 @@ it.effect("removing a key while a catalog read is pending prevents the upload", 
       Effect.provide(
         CloudSpeech.layer.pipe(
           Layer.provide(FetchHttpClient.layer),
+          Layer.provide(NodeServices.layer),
           Layer.provide(ServerSettings.ServerSettingsService.layerTest()),
           Layer.provide(Layer.mock(SecretResolver.SecretResolver)({})),
         ),

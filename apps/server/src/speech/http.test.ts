@@ -114,6 +114,14 @@ effectIt.live("rejects oversized chunked audio without invoking transcription", 
         }),
       );
       expect(changeKey.status).toBe(403);
+      const subscription = yield* Effect.promise(() =>
+        fetch(new URL("cloud/codex/transcribe", url), {
+          method: "POST",
+          headers: { "content-type": "application/octet-stream" },
+          body: encodeSpeechPcmRequest(new Uint8Array(4), DEFAULT_SPEECH_TRANSCRIPTION_OPTIONS),
+        }),
+      );
+      expect(subscription.status).toBe(403);
       yield* Effect.promise(() =>
         expect(
           fetch(url, {
@@ -146,7 +154,12 @@ effectIt.effect(
       const save = vi.fn();
       const transcribe = vi.fn();
       const cloud = Layer.mock(CloudSpeech.CloudSpeech)({
-        configured: Effect.sync(() => ({ openai: stored, xai: false })),
+        configured: (includeCodex) =>
+          Effect.sync(() => ({
+            openai: stored,
+            xai: false,
+            ...(includeCodex ? { codex: true } : {}),
+          })),
         models: Effect.succeed([{ id: "acme/transcribe-1", name: "Acme Transcribe" }]),
         setKey: (provider, key) =>
           Effect.sync(() => {
@@ -214,6 +227,7 @@ effectIt.effect(
       expect(yield* Effect.promise(() => keys.json())).toEqual({
         openai: true,
         xai: false,
+        codex: true,
       });
       const setReference = (key: unknown) =>
         call("xai/key", {
@@ -253,6 +267,8 @@ effectIt.effect(
         422,
       );
       expect(transcribe).toHaveBeenLastCalledWith("openrouter", "acme/transcribe-1");
+      expect((yield* call("codex/transcribe", audio)).status).toBe(422);
+      expect(transcribe).toHaveBeenLastCalledWith("codex", undefined);
       // Naming a path on the environment needs filesystem access, not only settings access.
       const link = yield* Effect.promise(() =>
         handler(

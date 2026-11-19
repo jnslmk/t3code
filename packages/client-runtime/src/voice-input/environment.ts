@@ -4,6 +4,7 @@ import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import { CloudSpeechError, SPEECH_STREAM_PATH } from "@t3tools/contracts";
 import type {
+  CloudSpeechApiKeyProvider,
   CloudSpeechModelId,
   CloudSpeechProvider,
   SettingsSecretValue,
@@ -100,7 +101,10 @@ export const requireCloudSpeechKey = (
         : Effect.fail(
             new VoiceTranscriptionError({
               code: "unavailable",
-              message: new CloudSpeechError({ provider, reason: "missing-key" }).message,
+              message:
+                provider === "codex" && keys.codex === undefined
+                  ? "Update the environment to use ChatGPT subscription dictation, and check your dictation permissions."
+                  : new CloudSpeechError({ provider, reason: "missing-key" }).message,
             }),
           ),
     ),
@@ -108,7 +112,7 @@ export const requireCloudSpeechKey = (
 
 export const setCloudSpeechKey = (
   prepared: PreparedConnection,
-  provider: CloudSpeechProvider,
+  provider: CloudSpeechApiKeyProvider,
   key: SettingsSecretValue | null,
 ) =>
   request({

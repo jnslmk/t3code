@@ -6,11 +6,13 @@ import {
   secretRequestReference,
 } from "@t3tools/client-runtime/secret-request";
 import {
+  AuthOrchestrationOperateScope,
   AuthSettingsWriteScope,
   CLOUD_SPEECH_LABELS,
   CLOUD_SPEECH_PROVIDER_NAMES,
   CloudSpeechProvider,
   CloudSpeechApiKey,
+  type CloudSpeechApiKeyProvider,
   CloudSpeechModelId,
   isSecretReference,
   type CloudSpeechModel,
@@ -32,7 +34,7 @@ import { ListChoiceRow } from "../../components/ui/ListChoiceRow";
 import { Chip } from "../../components/ui/Chip";
 import { ListSection } from "../../components/ui/ListSection";
 import type { EnvironmentPresentation } from "../../state/environments";
-import { useEnvironmentScope } from "../../state/session";
+import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
 import {
   chooseVoiceDestination,
   pendingCloudVoiceChoice,
@@ -64,7 +66,7 @@ export function CloudVoiceChoice({
           active
             ? `${CLOUD_SPEECH_LABELS[active.provider]}${active.provider === "openrouter" ? ` · ${active.model}` : ""}`
             : usable
-              ? "Use your own API key"
+              ? "Choose a subscription or use an API key"
               : "Not connected"
         }
         selected={active !== null}
@@ -178,7 +180,7 @@ function CloudChoices({ environment, active, onClose }: Props & { onClose: () =>
   const reload = useAtomRefresh(cloudVoiceKeysAtom(id));
   const canManage = useEnvironmentScope(id, AuthSettingsWriteScope);
   const [editing, setEditing] = useState<{
-    provider: CloudSpeechProvider;
+    provider: CloudSpeechApiKeyProvider;
     enable: boolean;
   } | null>(null);
   const catalogAtom = cloudVoiceModelsAtom(editing?.provider === "openrouter" ? id : null);
@@ -211,7 +213,7 @@ function CloudChoices({ environment, active, onClose }: Props & { onClose: () =>
       );
     }
   };
-  const edit = (provider: CloudSpeechProvider, enable: boolean) => {
+  const edit = (provider: CloudSpeechApiKeyProvider, enable: boolean) => {
     const stored = environment.serverConfig?.settings.cloudSpeechCredentials?.[provider];
     const ref =
       isSecretReference(stored) && sources.some((candidate) => candidate.id === stored.provider)
@@ -228,7 +230,7 @@ function CloudChoices({ environment, active, onClose }: Props & { onClose: () =>
     setEditing(null);
   };
   const changeKey = async (
-    provider: CloudSpeechProvider,
+    provider: CloudSpeechApiKeyProvider,
     value: SettingsSecretValue | null,
     chosen?: CloudSpeechModelId,
   ) => {
@@ -263,8 +265,8 @@ function CloudChoices({ environment, active, onClose }: Props & { onClose: () =>
               !connection
                 ? "Environment not connected"
                 : keys._tag === "Failure"
-                  ? "Could not load keys · Retry"
-                  : "Checking API keys…"
+                  ? "Could not load provider status · Retry"
+                  : "Checking provider status…"
             }
             disabled={!connection || keys._tag !== "Failure"}
             onPress={reload}
@@ -274,9 +276,52 @@ function CloudChoices({ environment, active, onClose }: Props & { onClose: () =>
     const saved = keys.value;
     if (!editing)
       return (
-        <ListSection footer={`Audio is sent through ${environment.label} using its API key.`}>
+        <ListSection
+          footer={`Audio is sent through ${environment.label} to the provider you choose.`}
+        >
           {CloudSpeechProvider.literals.map((provider, index) => {
             const label = CLOUD_SPEECH_LABELS[provider];
+            if (provider === "codex") {
+              const isActive = active?.provider === provider;
+              const disclosure = cloudSpeechDisclosure(provider, environment.label);
+              return (
+                <ListChoiceRow
+                  key={provider}
+                  label={label}
+                  leading={<ProviderIcon provider="codex" size={20} />}
+                  selected={isActive}
+                  separated={index > 0}
+                  disabled={!canManage || saved.codex === undefined || saving}
+                  description={
+                    !canManage
+                      ? "Requires environment settings permission"
+                      : saved.codex === undefined
+                        ? "Update the environment to use this provider"
+                        : !saved.codex
+                          ? "Sign in to Codex with ChatGPT on the environment · Tap to check again"
+                          : "Signed in to ChatGPT on the environment"
+                  }
+                  onPress={() => {
+                    if (!saved.codex) return reload();
+                    const message = `${disclosure} Select This device to stop sharing.`;
+                    if (isActive) return Dialog.alert(label, message);
+                    Dialog.confirm({
+                      title: `Use ${label} for dictation?`,
+                      message,
+                      confirmText: `Use ${label}`,
+                      onConfirm: () => {
+                        if (
+                          readEnvironmentScope(id, AuthOrchestrationOperateScope) &&
+                          readEnvironmentScope(id, AuthSettingsWriteScope)
+                        ) {
+                          enable(pendingCloudVoiceChoice(id, provider));
+                        }
+                      },
+                    });
+                  }}
+                />
+              );
+            }
             const routed = provider === "openrouter";
             const key = saved[provider];
             const isActive = active?.provider === provider;
