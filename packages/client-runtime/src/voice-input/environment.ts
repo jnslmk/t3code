@@ -95,9 +95,8 @@ export const requireCloudSpeechKey = (
   provider: CloudSpeechProvider,
 ) =>
   getCloudSpeechKeys(prepared).pipe(
-    Effect.flatMap((keys) => {
-      const available = provider === "opencode-go" ? keys.opencodeGo : keys[provider];
-      return available
+    Effect.flatMap((keys) =>
+      keys[provider]
         ? Effect.void
         : Effect.fail(
             new VoiceTranscriptionError({
@@ -105,12 +104,10 @@ export const requireCloudSpeechKey = (
               message:
                 provider === "codex" && keys.codex === undefined
                   ? "Update the environment to use ChatGPT subscription dictation, and check your dictation permissions."
-                  : provider === "opencode-go" && keys.opencodeGo === undefined
-                    ? "Update the environment to use OpenCode Go dictation, and check your dictation permissions."
-                    : new CloudSpeechError({ provider, reason: "missing-key" }).message,
+                  : new CloudSpeechError({ provider, reason: "missing-key" }).message,
             }),
-          );
-    }),
+          ),
+    ),
   );
 
 export const setCloudSpeechKey = (

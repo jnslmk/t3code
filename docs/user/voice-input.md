@@ -24,16 +24,15 @@ Set it back to **Off** at any time; a recording in progress is discarded.
 If the chosen environment goes offline, voice input waits for it. T3 Code never
 substitutes another environment.
 
-For cloud dictation, choose **OpenAI**, **Grok Voice Transcribe**, or **OpenCode Go** via
-the environment you want to use. OpenAI and Grok Voice Transcribe need an API key: enter
-one and choose **Save and enable**. You can also choose a [secret provider](secrets.md)
-instead of **Value** and enter a reference. Unlock the vault on that environment before
-dictating. Anyone with dictation access to the environment can use the key, but only this
-device opts in.
-If a key is already saved, just confirm the provider. After you stop, the
-environment forwards your recording and any vocabulary hints to the selected
-provider, billed to its API account or subscription. No local model download is
-needed. Switch back to **This device** on mobile or **Off** on
+For cloud dictation, choose **OpenAI** or **Grok Voice Transcribe** via the environment
+you want to use. If it needs a key, enter one and choose **Save and enable**.
+You can also choose a [secret provider](secrets.md) instead of **Value** and enter a
+reference. Unlock the vault on that environment before dictating. Anyone with
+dictation access to the environment can use the key, but only this device opts in.
+If a key is already saved, just confirm the provider. After
+you stop, the environment forwards your recording and any vocabulary hints to
+the selected provider, which bills its API account. No local model download or chat
+subscription is needed. Switch back to **This device** on mobile or **Off** on
 web and desktop to stop sharing. Removing the key stops that provider for everyone
 on the environment.
 
@@ -58,14 +57,6 @@ apply, and T3 Code never falls back to the separately billed OpenAI API.
 Sign in with ChatGPT in Codex on that environment. To use a different existing
 Codex login for dictation, set `T3CODE_VOICE_CODEX_HOME` in the environment that
 launches the T3 server. Otherwise T3 uses `CODEX_HOME` or `~/.codex`.
-
-**OpenCode Go** uses the OpenCode Go login on the selected environment. Choose it
-under **Settings → Voice → Transcribe with**. Only connections with permission to
-change environment settings can use that login for dictation. T3 Code reads the
-credential OpenCode already stores for `opencode-go`; connect OpenCode Go in
-OpenCode first. The recording and vocabulary hints are sent to OpenCode, which
-transcribes with a Gemini model included in the Go subscription. Subscription
-limits apply.
 
 ## Set up a model
 

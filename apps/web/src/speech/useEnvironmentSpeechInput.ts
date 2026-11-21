@@ -124,7 +124,7 @@ export function useVoiceTranscriptionDestination() {
   const environment = useEnvironment(environmentId);
   const connection = Option.getOrNull(usePreparedConnection(environmentId));
   const canDictate = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
-  const canUseHostCredentials = useEnvironmentScope(environmentId, AuthSettingsWriteScope);
+  const canUseSubscription = useEnvironmentScope(environmentId, AuthSettingsWriteScope);
   const cloud = grant?.destination.kind === "cloud" ? grant.destination : undefined;
   const provider = cloud?.provider;
   const model = cloud?.provider === "openrouter" ? cloud.model : undefined;
@@ -132,7 +132,6 @@ export function useVoiceTranscriptionDestination() {
     environment?.serverConfig?.environment.capabilities[
       provider ? "cloudVoiceTranscription" : "voiceTranscription"
     ] === true;
-  const needsHostCredentials = provider === "codex" || provider === "opencode-go";
   return {
     ...(hydrated && choice === null ? { offerFirstRunSetup: true } : {}),
     environmentId,
@@ -144,9 +143,7 @@ export function useVoiceTranscriptionDestination() {
         ? `${CLOUD_SPEECH_LABELS[provider]} via ${environment.label}`
         : (environment?.label ?? null),
     prepared:
-      supported && canDictate && (!needsHostCredentials || canUseHostCredentials)
-        ? connection
-        : null,
+      supported && canDictate && (provider !== "codex" || canUseSubscription) ? connection : null,
   };
 }
 

@@ -15,10 +15,8 @@ import {
 } from "@t3tools/contracts";
 import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
 import * as HostProcess from "@t3tools/shared/HostProcess";
-import { readOpenCodeGoApiKeys } from "@t3tools/provider-opencode/server/openCodeGoCredentials";
 import { cloudSpeechLanguages, effectiveSpeechLanguage } from "@t3tools/shared/speech";
 import * as Context from "effect/Context";
-import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
@@ -43,35 +41,11 @@ const endpoints = {
 const OPENROUTER_CATALOG_URL =
   "https://openrouter.ai/api/v1/models?output_modalities=transcription&zdr=true";
 const CODEX_TRANSCRIPTION_URL = "https://chatgpt.com/backend-api/transcribe";
-// OpenCode Go has no transcription endpoint; an audio-capable Gemini model is
-// the only speech-to-text path on the subscription.
-const OPENCODE_GO_TRANSCRIPTION_URL =
-  "https://opencode.ai/inference/go/google/v1beta/models/gemini-4-argon:generateContent";
 const isApiKey = Schema.is(CloudSpeechApiKey);
 const isModelId = Schema.is(CloudSpeechModelId);
 const sameCredential = Schema.toEquivalence(SettingsSecretValue);
 const OpenRouterCatalog = Schema.Struct({
   data: Schema.Array(Schema.Struct({ id: Schema.String, name: Schema.optionalKey(Schema.String) })),
-});
-const OpenCodeGoTranscription = Schema.Struct({
-  candidates: Schema.optionalKey(
-    Schema.Array(
-      Schema.Struct({
-        content: Schema.optionalKey(
-          Schema.Struct({
-            parts: Schema.optionalKey(
-              Schema.Array(
-                Schema.Struct({
-                  text: Schema.optionalKey(Schema.String),
-                  thought: Schema.optionalKey(Schema.Boolean),
-                }),
-              ),
-            ),
-          }),
-        ),
-      }),
-    ),
-  ),
 });
 const decodeCodexTokens = Schema.decodeUnknownEffect(
   Schema.fromJsonString(
@@ -147,36 +121,6 @@ function openRouterBody(model: string, audio: ArrayBuffer, language: string) {
   });
 }
 
-function openCodeGoBody(audio: ArrayBuffer, language: string, options: SpeechTranscriptionOptions) {
-  const hints = options.speechCustomWords
-    .map(({ term }) => term.replace(/[<>\r\n]/g, " "))
-    .join(", ");
-  const instructions = [
-    "Transcribe the speech in this audio verbatim. Return only the transcript, without commentary or formatting.",
-    language === "auto" ? "Detect the spoken language." : `The speech is in ${language}.`,
-    hints ? `Spell these terms exactly when spoken: ${hints}.` : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
-  return HttpClientRequest.bodyJsonUnsafe({
-    contents: [
-      {
-        role: "user",
-        parts: [
-          { text: instructions },
-          {
-            inline_data: {
-              mime_type: "audio/wav",
-              data: Buffer.from(audio).toString("base64"),
-            },
-          },
-        ],
-      },
-    ],
-    generationConfig: { maxOutputTokens: 8192 },
-  });
-}
-
 export class CloudSpeech extends Context.Service<
   CloudSpeech,
   {
@@ -222,29 +166,13 @@ export const layer = Layer.effect(
     const credentials = settings.getSettings.pipe(
       Effect.map((value) => value.cloudSpeechCredentials),
     );
-    const openCodeGoSession = `ses_${SecureRandom.uuidV4Unsafe().replaceAll("-", "")}`;
-    const readOpenCodeGoKeys = readOpenCodeGoApiKeys({
-      environment: env,
-      homeDirectory: hostHome,
-    }).pipe(
-      Effect.orElseSucceed(() => []),
-      Effect.provideService(FileSystem.FileSystem, fs),
-      Effect.provideService(Path.Path, path),
-    );
-    const configured = Effect.fn("CloudSpeech.configured")(function* (
-      includeHostCredentials = false,
-    ) {
+    const configured = Effect.fn("CloudSpeech.configured")(function* (includeCodex = false) {
       const { openai, xai, openrouter } = yield* credentials;
       return {
         openai: Boolean(openai),
         xai: Boolean(xai),
         openrouter: Boolean(openrouter),
-        ...(includeHostCredentials
-          ? {
-              codex: Option.isSome(yield* readCodexTokens),
-              opencodeGo: (yield* readOpenCodeGoKeys).length > 0,
-            }
-          : {}),
+        ...(includeCodex ? { codex: Option.isSome(yield* readCodexTokens) } : {}),
       };
     });
     const execute = (request: HttpClientRequest.HttpClientRequest) =>
@@ -297,9 +225,7 @@ export const layer = Layer.effect(
         model?: string,
       ) {
         const api =
-          provider === "codex" || provider === "opencode-go"
-            ? undefined
-            : { provider, source: (yield* credentials)[provider] };
+          provider === "codex" ? undefined : { provider, source: (yield* credentials)[provider] };
         if (api && !api.source)
           return yield* new CloudSpeechError({ provider, reason: "missing-key" });
         if (provider === "openrouter" && (!model || !isModelId(model)))
@@ -314,7 +240,7 @@ export const layer = Layer.effect(
         });
         const language = effectiveSpeechLanguage(cloudSpeechLanguages, options.speechLanguage);
         let request: HttpClientRequest.HttpClientRequest;
-        if (provider === "codex") {
+        if (api === undefined) {
           const tokens = yield* readCodexTokens;
           if (Option.isNone(tokens))
             return yield* new CloudSpeechError({ provider, reason: "missing-key" });
@@ -327,19 +253,8 @@ export const layer = Layer.effect(
             }),
             audioBody("codex", wave(samples), language, options),
           );
-        } else if (provider === "opencode-go") {
-          const [key] = yield* readOpenCodeGoKeys;
-          if (!key) return yield* new CloudSpeechError({ provider, reason: "missing-key" });
-          request = HttpClientRequest.post(OPENCODE_GO_TRANSCRIPTION_URL).pipe(
-            HttpClientRequest.bearerToken(Redacted.make(key)),
-            HttpClientRequest.setHeaders({
-              "x-opencode-session": openCodeGoSession,
-              "user-agent": "T3Code",
-            }),
-            openCodeGoBody(wave(samples), language, options),
-          );
         } else {
-          const { provider, source } = api!;
+          const { provider, source } = api;
           if (provider === "openrouter" && !(yield* models).some((entry) => entry.id === model))
             return yield* new CloudSpeechError({ provider, reason: "model-unavailable" });
           // A vault that locked since the last recording must not authorize a new upload.
@@ -366,7 +281,7 @@ export const layer = Layer.effect(
         }
         const unavailable = () => new CloudSpeechError({ provider, reason: "unavailable" });
         const response = yield* (
-          provider === "codex" || provider === "opencode-go"
+          provider === "codex"
             ? subscriptionHttp.execute(request).pipe(
                 Effect.provideService(FetchHttpClient.RequestInit, {
                   redirect: "error",
@@ -389,23 +304,9 @@ export const layer = Layer.effect(
                     ? "model-unavailable"
                     : "unavailable",
           });
-        let text: string;
-        if (provider === "opencode-go") {
-          const { candidates } = yield* HttpClientResponse.schemaBodyJson(OpenCodeGoTranscription)(
-            response,
-          ).pipe(Effect.mapError(unavailable));
-          text =
-            candidates
-              ?.flatMap(({ content }) => content?.parts ?? [])
-              .filter((part) => !part.thought)
-              .map((part) => part.text ?? "")
-              .join("") ?? "";
-        } else {
-          const result = yield* HttpClientResponse.schemaBodyJson(
-            EnvironmentSpeechTranscriptionResult,
-          )(response).pipe(Effect.mapError(unavailable));
-          text = result.text;
-        }
+        const { text } = yield* HttpClientResponse.schemaBodyJson(
+          EnvironmentSpeechTranscriptionResult,
+        )(response).pipe(Effect.mapError(unavailable));
         const corrected = applySpeechAliases(text, options.speechCustomWords);
         return (
           options.speechRemoveFillerWords

@@ -281,34 +281,28 @@ function CloudChoices({ environment, active, onClose }: Props & { onClose: () =>
         >
           {CloudSpeechProvider.literals.map((provider, index) => {
             const label = CLOUD_SPEECH_LABELS[provider];
-            if (provider === "codex" || provider === "opencode-go") {
-              const codex = provider === "codex";
-              const connected = codex ? saved.codex : saved.opencodeGo;
+            if (provider === "codex") {
               const isActive = active?.provider === provider;
               const disclosure = cloudSpeechDisclosure(provider, environment.label);
               return (
                 <ListChoiceRow
                   key={provider}
                   label={label}
-                  leading={<ProviderIcon provider={codex ? "codex" : "opencode"} size={20} />}
+                  leading={<ProviderIcon provider="codex" size={20} />}
                   selected={isActive}
                   separated={index > 0}
-                  disabled={!canManage || connected === undefined || saving}
+                  disabled={!canManage || saved.codex === undefined || saving}
                   description={
                     !canManage
                       ? "Requires environment settings permission"
-                      : connected === undefined
+                      : saved.codex === undefined
                         ? "Update the environment to use this provider"
-                        : !connected
-                          ? codex
-                            ? "Sign in to Codex with ChatGPT on the environment · Tap to check again"
-                            : "Connect OpenCode Go in OpenCode on the environment · Tap to check again"
-                          : codex
-                            ? "Signed in to ChatGPT on the environment"
-                            : "Connected in OpenCode on the environment"
+                        : !saved.codex
+                          ? "Sign in to Codex with ChatGPT on the environment · Tap to check again"
+                          : "Signed in to ChatGPT on the environment"
                   }
                   onPress={() => {
-                    if (!connected) return reload();
+                    if (!saved.codex) return reload();
                     const message = `${disclosure} Select This device to stop sharing.`;
                     if (isActive) return Dialog.alert(label, message);
                     Dialog.confirm({

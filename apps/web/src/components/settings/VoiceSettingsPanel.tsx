@@ -130,9 +130,7 @@ function CloudSpeechLogo({ provider }: { provider: CloudSpeechProvider }) {
     return <ProviderPackageIcon icon={openRouterIcon} aria-hidden className="size-4 shrink-0" />;
   return (
     <ProviderInstanceIcon
-      driverKind={ProviderDriverKind.make(
-        provider === "xai" ? "grok" : provider === "opencode-go" ? "opencode" : "codex",
-      )}
+      driverKind={ProviderDriverKind.make(provider === "xai" ? "grok" : "codex")}
       displayName={CLOUD_SPEECH_LABELS[provider]}
       iconClassName="size-4"
     />
@@ -1239,11 +1237,9 @@ export function VoiceSettingsPanel() {
   const manageLabel =
     destination.cloudProvider === "codex"
       ? "ChatGPT subscription status"
-      : destination.cloudProvider === "opencode-go"
-        ? "OpenCode Go status"
-        : destination.cloudProvider === "openrouter"
-          ? "Manage OpenRouter"
-          : "Manage key";
+      : destination.cloudProvider === "openrouter"
+        ? "Manage OpenRouter"
+        : "Manage key";
   const chosenEnvironment = environments.find(
     (environment) => environment.environmentId === destination.environmentId,
   );
@@ -1457,8 +1453,7 @@ export function VoiceSettingsPanel() {
                 chosenEnvironment &&
                 (canManageKey ||
                   destination.cloudProvider === "openrouter" ||
-                  destination.cloudProvider === "codex" ||
-                  destination.cloudProvider === "opencode-go") && (
+                  destination.cloudProvider === "codex") && (
                   <Tooltip>
                     <TooltipTrigger
                       render={
