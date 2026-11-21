@@ -161,8 +161,8 @@ type CloudVoiceProps = {
 };
 
 export function CloudVoiceConfiguration({ provider, ...props }: CloudVoiceProps) {
-  return provider === "codex" ? (
-    <SubscriptionVoiceConfiguration {...props} />
+  return provider === "codex" || provider === "opencode-go" ? (
+    <SubscriptionVoiceConfiguration {...props} provider={provider} />
   ) : (
     <ApiKeyVoiceConfiguration {...props} provider={provider} />
   );
@@ -170,10 +170,13 @@ export function CloudVoiceConfiguration({ provider, ...props }: CloudVoiceProps)
 
 function SubscriptionVoiceConfiguration({
   environment,
+  provider,
   active,
   close,
-}: Omit<CloudVoiceProps, "provider">) {
+}: Omit<CloudVoiceProps, "provider"> & { provider: "codex" | "opencode-go" }) {
   const id = environment.environmentId;
+  const name = CLOUD_SPEECH_LABELS[provider];
+  const codex = provider === "codex";
   const prepared = Option.getOrNull(usePreparedConnection(id));
   const canUse = useEnvironmentScope(id, AuthOrchestrationOperateScope);
   const canManage = useEnvironmentScope(id, AuthSettingsWriteScope);
@@ -181,33 +184,41 @@ function SubscriptionVoiceConfiguration({
     canUse && canManage ? prepared : null,
     getCloudSpeechKeys,
   );
-  const ready = AsyncResult.isSuccess(presence) && presence.value?.codex === true;
-  const signedOut = AsyncResult.isSuccess(presence) && presence.value?.codex === false;
+  const keys = AsyncResult.isSuccess(presence) ? presence.value : null;
+  const signedIn = codex ? keys?.codex : keys?.opencodeGo;
+  const ready = AsyncResult.isSuccess(presence) && signedIn === true;
+  const signedOut = AsyncResult.isSuccess(presence) && signedIn === false;
 
   return (
     <Dialog open onOpenChange={(open) => !open && close()}>
       <DialogPopup className="max-w-md">
         <DialogHeader>
-          <DialogTitle>
-            {active ? "ChatGPT subscription status" : "Use ChatGPT subscription for dictation?"}
-          </DialogTitle>
-          <DialogDescription>{cloudSpeechDisclosure("codex", environment.label)}</DialogDescription>
+          <DialogTitle>{active ? `${name} status` : `Use ${name} for dictation?`}</DialogTitle>
+          <DialogDescription>
+            {cloudSpeechDisclosure(provider, environment.label)}
+          </DialogDescription>
         </DialogHeader>
         <DialogPanel>
           {!prepared || !canUse ? (
             <p>Connect to {environment.label} with dictation access to continue.</p>
           ) : !canManage ? (
-            <p>You need environment settings permission to use its ChatGPT subscription.</p>
+            <p>You need environment settings permission to use its {name} login.</p>
           ) : AsyncResult.isFailure(presence) ? (
             <Button size="sm" variant="outline" onClick={refresh}>
-              Retry checking ChatGPT sign-in
+              Retry checking {name}
             </Button>
           ) : !AsyncResult.isSuccess(presence) || !presence.value ? (
-            <p role="status">Checking ChatGPT sign-in…</p>
-          ) : presence.value.codex === undefined ? (
-            <p>Update {environment.label} to use ChatGPT subscription dictation.</p>
+            <p role="status">Checking {name}…</p>
+          ) : signedIn === undefined ? (
+            <p>
+              Update {environment.label} to use {name} dictation.
+            </p>
           ) : !ready ? (
-            <p>Sign in to Codex with ChatGPT on {environment.label}, then check again.</p>
+            <p>
+              {codex
+                ? `Sign in to Codex with ChatGPT on ${environment.label}, then check again.`
+                : `Connect OpenCode Go in OpenCode on ${environment.label}, then check again.`}
+            </p>
           ) : (
             <p>This choice applies only to this device. Choose Off to stop sharing.</p>
           )}
@@ -232,11 +243,11 @@ function SubscriptionVoiceConfiguration({
                 ) {
                   return;
                 }
-                chooseAudioDestination({ kind: "cloud", provider: "codex", environmentId: id });
+                chooseAudioDestination({ kind: "cloud", provider, environmentId: id });
                 close();
               }}
             >
-              Use ChatGPT subscription
+              Use {name}
             </Button>
           )}
         </DialogFooter>

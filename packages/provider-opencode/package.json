@@ -27,6 +27,10 @@
       "types": "./src/server/OpenCodeServerLedger.ts",
       "import": "./src/server/OpenCodeServerLedger.ts"
     },
+    "./server/openCodeGoCredentials": {
+      "types": "./src/server/openCodeGoCredentials.ts",
+      "import": "./src/server/openCodeGoCredentials.ts"
+    },
     "./server/v2/adapter": {
       "types": "./src/server/v2/adapter.ts",
       "import": "./src/server/v2/adapter.ts"

@@ -252,7 +252,7 @@ export const voiceRouteAtom = Atom.make((get) => {
   if (!grant) return null;
   const cloud = grant.destination.kind === "cloud" ? grant.destination : undefined;
   const connectionAtom = (
-    cloud?.provider === "codex"
+    cloud?.provider === "codex" || cloud?.provider === "opencode-go"
       ? subscriptionVoiceConnectionAtom
       : cloud
         ? cloudVoiceConnectionAtom

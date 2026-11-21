@@ -108,7 +108,7 @@ export const speechHttpApiLayer = HttpApiBuilder.group(
         "transcribeCloud",
         Effect.fn("environment.voice.transcribeCloud")(function* (args) {
           yield* guard(args.endpoint.name);
-          if (args.params.provider === "codex")
+          if (args.params.provider === "codex" || args.params.provider === "opencode-go")
             yield* requireEnvironmentScope(AuthSettingsWriteScope);
           const decoded = parseAudio(args.payload);
           if (Option.isNone(decoded)) return yield* failEnvironmentInvalidRequest("invalid_audio");

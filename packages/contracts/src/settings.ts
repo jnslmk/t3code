@@ -379,7 +379,7 @@ export const VoiceTranscriptionDestination = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("cloud"),
     environmentId: EnvironmentId,
-    provider: Schema.Literals(["openai", "xai", "codex"]),
+    provider: Schema.Literals(["openai", "xai", "codex", "opencode-go"]),
   }),
   Schema.Struct({
     kind: Schema.Literal("cloud"),

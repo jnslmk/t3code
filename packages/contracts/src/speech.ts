@@ -13,6 +13,7 @@ export type CloudSpeechApiKeyProvider = typeof CloudSpeechApiKeyProvider.Type;
 export const CloudSpeechProvider = Schema.Literals([
   ...CloudSpeechApiKeyProvider.literals,
   "codex",
+  "opencode-go",
 ]);
 export type CloudSpeechProvider = typeof CloudSpeechProvider.Type;
 export const CLOUD_SPEECH_LABELS = {
@@ -20,12 +21,14 @@ export const CLOUD_SPEECH_LABELS = {
   xai: "Grok Voice Transcribe",
   openrouter: "OpenRouter",
   codex: "ChatGPT subscription",
+  "opencode-go": "OpenCode Go",
 } as const;
 export const CLOUD_SPEECH_PROVIDER_NAMES = {
   openai: "OpenAI",
   xai: "xAI",
   openrouter: "OpenRouter",
   codex: "ChatGPT",
+  "opencode-go": "OpenCode Go",
 } as const;
 /** Older environments omit providers they do not support. */
 export const CloudSpeechKeys = Schema.Struct({
@@ -33,6 +36,7 @@ export const CloudSpeechKeys = Schema.Struct({
   xai: Schema.Boolean,
   openrouter: Schema.optionalKey(Schema.Boolean),
   codex: Schema.optionalKey(Schema.Boolean),
+  opencodeGo: Schema.optionalKey(Schema.Boolean),
 });
 export type CloudSpeechKeys = typeof CloudSpeechKeys.Type;
 
@@ -70,7 +74,9 @@ export class CloudSpeechError extends Schema.TaggedError<CloudSpeechError>()(
       case "missing-key":
         return this.provider === "codex"
           ? "Sign in with ChatGPT in Codex on the selected environment, then try again."
-          : `Add your ${name} API key in Settings → Voice.`;
+          : this.provider === "opencode-go"
+            ? "Connect OpenCode Go in OpenCode on the selected environment, then try again."
+            : `Add your ${name} API key in Settings → Voice.`;
       case "key-changed":
         return `The ${name} key changed before your recording was sent. Try again.`;
       case "unreadable-key":
@@ -78,7 +84,9 @@ export class CloudSpeechError extends Schema.TaggedError<CloudSpeechError>()(
       case "rejected-key":
         return this.provider === "codex"
           ? "ChatGPT rejected this Codex login or subscription. Check the account on the selected environment and sign in again if needed."
-          : `${name} rejected this API key. Check its permissions and billing in Settings → Voice.`;
+          : this.provider === "opencode-go"
+            ? "OpenCode Go rejected the login on the selected environment. Check the subscription and reconnect OpenCode."
+            : `${name} rejected this API key. Check its permissions and billing in Settings → Voice.`;
       case "rate-limit":
         return `${name} reached a usage limit. Check the account's quota or try again later.`;
       case "model-unavailable":
